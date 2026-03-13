@@ -1034,22 +1034,45 @@ def run_app():
         if not creds["configured"]:
             st.warning("Azure credentials missing in config.")
         elif not st.session_state.get("access_token"):
-            if st.button("Login with Microsoft", type="primary"):
-                st.markdown(f"[Click here to login]({get_auth_url(creds['client_id'], creds['tenant_id'])})")
-                st.stop()
+            # Use st.markdown with a JS redirect to stay in the same tab
+            auth_url = get_auth_url(creds["client_id"], creds["tenant_id"])
+            st.markdown(
+                f"""
+                <a href="{auth_url}" target="_self">
+                    <button style="
+                        width:100%; padding:10px; border:none; border-radius:8px;
+                        background:#0078d4; color:white; font-size:14px;
+                        font-weight:600; cursor:pointer;
+                    ">🔑 Login with Microsoft</button>
+                </a>
+                """,
+                unsafe_allow_html=True,
+            )
         else:
             name = (st.session_state.user_info or {}).get("displayName", "User")
-            st.success(f"Logged in as: {name}")
+            st.success(f"✅ Logged in as: {name}")
             if st.button("Logout"):
                 for key in list(st.session_state.keys()): del st.session_state[key]
                 st.rerun()
  
         if st.session_state.get("access_token"):
             st.header("SharePoint Site")
-            site_url = st.text_input("Enter SharePoint Site URL")
-            if st.button("Connect Site") and site_url:
-                site, _ = get_site_from_url(st.session_state.access_token, site_url)
-                if site: st.session_state.site_info = site
+            if st.session_state.get("site_info"):
+                site_name = st.session_state.site_info.get("displayName") or st.session_state.site_info.get("name", "Site")
+                st.success(f"✅ Connected: {site_name}")
+                if st.button("🔄 Change Site", key="change_site"):
+                    st.session_state.pop("site_info", None)
+                    st.rerun()
+            else:
+                site_url = st.text_input("Enter SharePoint Site URL")
+                if st.button("Connect Site") and site_url:
+                    with st.spinner("Connecting..."):
+                        site, err = get_site_from_url(st.session_state.access_token, site_url)
+                    if site:
+                        st.session_state.site_info = site
+                        st.rerun()
+                    else:
+                        st.error(f"Could not connect: {err}")
  
     # Main UI Steps
     st.subheader("1. Select Payroll Period")
@@ -1070,3 +1093,4 @@ def run_app():
  
     if st.button("🚀 Process and Generate Payroll", type="primary", use_container_width=True):
         _handle_process(output_dest, workbook_action, start_date, end_date)
+ 

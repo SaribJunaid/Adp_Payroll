@@ -398,7 +398,7 @@
 #     if st.button("🚀 Process and Generate Payroll", type="primary", use_container_width=True):
 #         _handle_process(output_dest, workbook_action, start_date, end_date)
 
-import io
+iimport io
 from datetime import datetime, timedelta
 import streamlit as st
 from openpyxl import load_workbook
@@ -855,10 +855,33 @@ def _render_output_config():
  
         workbook_action = st.radio(
             "Workbook Action:",
-            ["Add Sheet to Existing ADP.xlsx", "Create New Workbook"],
+            ["Add Sheet to Existing Workbook", "Create New Workbook"],
             horizontal=True,
             key="wb_action_radio"
         )
+ 
+        # When adding to existing — let user pick the target .xlsx from the same folder
+        if workbook_action == "Add Sheet to Existing Workbook":
+            items_now, _ = list_sharepoint_files(
+                st.session_state.access_token,
+                st.session_state.site_info["id"],
+                st.session_state.output_path,
+            )
+            xlsx_files = [i for i in (items_now or []) if i["name"].lower().endswith(".xlsx")]
+            if xlsx_files:
+                chosen = st.selectbox(
+                    "Select target workbook:",
+                    [f["name"] for f in xlsx_files],
+                    key="target_wb_select",
+                )
+                # Store the chosen file's id and name in session state
+                chosen_obj = next(f for f in xlsx_files if f["name"] == chosen)
+                st.session_state["target_wb_id"]   = chosen_obj["id"]
+                st.session_state["target_wb_name"] = chosen_obj["name"]
+            else:
+                st.warning("No .xlsx files found in this folder — switch to 'Create New Workbook' or navigate to the right folder.")
+                st.session_state.pop("target_wb_id",   None)
+                st.session_state.pop("target_wb_name", None)
  
     return output_dest, workbook_action
  
@@ -936,11 +959,51 @@ def _handle_process(output_dest, workbook_action, start_date, end_date):
                 path = st.session_state.output_path
  
                 if workbook_action == "Create New Workbook":
-                    upload_to_sharepoint(token, site_id, path, filename, excel_out.getvalue())
-                    st.info(f"File uploaded to {path}")
+                    ok, err = upload_to_sharepoint(token, site_id, path, filename, excel_out.getvalue())
+                    if ok:
+                        st.success(f"✅ Uploaded **{filename}** to `{path}`")
+                    else:
+                        st.error(f"Upload failed: {err}")
+                        st.download_button("📥 Download instead", excel_out.getvalue(), filename)
                 else:
-                    add_sheet_to_workbook(token, site_id, path, "ADP.xlsx", excel_out.getvalue(), period_str)
-                    st.info(f"Sheet '{period_str}' added to ADP.xlsx")
+                    # Add Sheet to Existing Workbook:
+                    # 1. Download the existing workbook bytes from SharePoint
+                    # 2. Merge new sheet into it using add_sheet_to_workbook()
+                    # 3. Re-upload the merged workbook back to SharePoint
+                    wb_id   = st.session_state.get("target_wb_id")
+                    wb_name = st.session_state.get("target_wb_name", "ADP.xlsx")
+ 
+                    if not wb_id:
+                        st.error("No target workbook selected. Please choose one in Output Configuration.")
+                        st.download_button("📥 Download instead", excel_out.getvalue(), filename)
+                    else:
+                        with st.spinner(f"Downloading {wb_name}..."):
+                            existing_bytes, dl_err = download_sharepoint_file(token, site_id, wb_id)
+ 
+                        if dl_err or not existing_bytes:
+                            st.error(f"Could not download {wb_name}: {dl_err}")
+                            st.download_button("📥 Download instead", excel_out.getvalue(), filename)
+                        else:
+                            with st.spinner("Merging sheet into workbook..."):
+                                merged, merge_err = add_sheet_to_workbook(
+                                    existing_bytes,       # existing workbook bytes
+                                    excel_out.getvalue(), # new sheet bytes
+                                    period_str,           # sheet name
+                                )
+ 
+                            if merge_err or not merged:
+                                st.error(f"Merge failed: {merge_err}")
+                                st.download_button("📥 Download instead", excel_out.getvalue(), filename)
+                            else:
+                                with st.spinner(f"Uploading merged {wb_name}..."):
+                                    ok, up_err = upload_to_sharepoint(
+                                        token, site_id, path, wb_name, merged.getvalue()
+                                    )
+                                if ok:
+                                    st.success(f"✅ Sheet **'{period_str}'** added to **{wb_name}**")
+                                else:
+                                    st.error(f"Upload failed: {up_err}")
+                                    st.download_button("📥 Download instead", excel_out.getvalue(), filename)
  
 def run_app():
     st.set_page_config(page_title="Payroll Processor", page_icon="💸", layout="wide")

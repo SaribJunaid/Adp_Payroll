@@ -426,6 +426,133 @@ from payroll_app.sharepoint import (
 )
 from payroll_app.state import init_session_state
  
+# ── Shared CSS injected once ──────────────────────────────────────────────────
+_CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap');
+ 
+/* Global font */
+html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
+ 
+/* File picker card */
+.fp-card {
+    background: #0f1117;
+    border: 1px solid #2a2d3a;
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin-bottom: 12px;
+}
+ 
+/* Breadcrumb bar */
+.fp-breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: #1a1d27;
+    border: 1px solid #2a2d3a;
+    border-radius: 8px;
+    padding: 8px 14px;
+    margin-bottom: 12px;
+    font-family: 'DM Mono', monospace;
+    font-size: 12px;
+    color: #8b92a5;
+    flex-wrap: wrap;
+}
+.fp-breadcrumb .crumb { color: #c9d1e0; }
+.fp-breadcrumb .sep { color: #3d4155; }
+.fp-breadcrumb .crumb-root { color: #5b6bff; font-weight: 600; }
+ 
+/* Folder grid */
+.fp-folder-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 8px;
+    margin-bottom: 14px;
+}
+.fp-folder-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: #1a1d27;
+    border: 1px solid #2a2d3a;
+    border-radius: 8px;
+    padding: 10px 12px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    font-size: 13px;
+    color: #c9d1e0;
+    text-align: left;
+    width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.fp-folder-btn:hover {
+    background: #21253a;
+    border-color: #5b6bff;
+    color: #fff;
+}
+.fp-folder-btn .icon { font-size: 16px; flex-shrink: 0; }
+ 
+/* File list */
+.fp-file-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: #1a1d27;
+    border: 1px solid #2a2d3a;
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 6px;
+    font-size: 13px;
+    color: #c9d1e0;
+}
+.fp-file-item .file-icon { font-size: 18px; }
+.fp-file-item .file-name { flex: 1; font-family: 'DM Mono', monospace; font-size: 12px; }
+.fp-file-item .file-size { color: #5b6170; font-size: 11px; }
+ 
+/* Status badge */
+.fp-status-ok {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: #0d2b1e; border: 1px solid #1a5c38;
+    color: #4ade80; border-radius: 20px;
+    padding: 4px 12px; font-size: 12px; font-weight: 500;
+    margin-top: 8px;
+}
+.fp-status-pending {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: #1a1d27; border: 1px solid #2a2d3a;
+    color: #8b92a5; border-radius: 20px;
+    padding: 4px 12px; font-size: 12px;
+    margin-top: 8px;
+}
+</style>
+"""
+ 
+def _inject_css():
+    if not st.session_state.get("_css_injected"):
+        st.markdown(_CSS, unsafe_allow_html=True)
+        st.session_state["_css_injected"] = True
+ 
+def _breadcrumb(path):
+    """Render a styled breadcrumb from a path string."""
+    if path == "root":
+        parts_html = '<span class="crumb-root">⌂ Root</span>'
+    else:
+        segments = path.split("/")
+        crumbs = ['<span class="crumb-root">⌂ Root</span>']
+        for seg in segments:
+            crumbs.append(f'<span class="sep">›</span><span class="crumb">{seg}</span>')
+        parts_html = "".join(crumbs)
+    st.markdown(f'<div class="fp-breadcrumb">{parts_html}</div>', unsafe_allow_html=True)
+ 
+def _file_icon(name):
+    name = name.lower()
+    if name.endswith(".csv"):  return "📄"
+    if name.endswith(".xlsx"): return "📊"
+    if name.endswith(".pdf"):  return "📕"
+    return "📎"
+ 
 def _render_sharepoint_file_picker(
     title,
     file_types,
@@ -433,100 +560,144 @@ def _render_sharepoint_file_picker(
     state_key_name=None,
     select_mode="single",
     confirm_label="Confirm File",
-    current_path_key=None,  # now auto-derived per file picker
+    current_path_key=None,
 ):
     key_pref = title.lower().replace(" ", "_")
-    # Each file picker gets its own independent path key in session state
     path_key = current_path_key or f"{key_pref}_path"
     if path_key not in st.session_state:
         st.session_state[path_key] = "root"
  
-    with st.expander(title, expanded=True):
-        source_key = f"{key_pref}_source"
+    # Check if already loaded — show persistent status badge
+    already_loaded = bool(st.session_state.get(state_key_data))
+    loaded_name = st.session_state.get(state_key_name, "")
+ 
+    with st.expander(title, expanded=not already_loaded):
+        # Status badge at top
+        if already_loaded:
+            if select_mode == "multiple":
+                count = len(st.session_state[state_key_data])
+                st.markdown(f'<div class="fp-status-ok">✓ {count} file{"s" if count != 1 else ""} loaded</div>', unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div class="fp-status-ok">✓ {loaded_name or "File loaded"}</div>', unsafe_allow_html=True)
+            if st.button("↺ Change", key=f"{key_pref}_clear", help="Load a different file"):
+                del st.session_state[state_key_data]
+                if state_key_name and state_key_name in st.session_state:
+                    del st.session_state[state_key_name]
+                st.rerun()
+            return
+ 
         source = st.radio(
-            f"{title} Source:",
-            ["Desktop", "SharePoint"],
-            key=source_key,
+            "Source:",
+            ["💻 Desktop", "☁️ SharePoint"],
+            key=f"{key_pref}_source",
             horizontal=True,
         )
  
-        if source == "Desktop":
+        if source == "💻 Desktop":
             if select_mode == "multiple":
                 uploads = st.file_uploader(
-                    f"Upload {title}",
-                    type=file_types,
-                    accept_multiple_files=True,
-                    key=f"{key_pref}_upload",
+                    f"Upload {title}", type=file_types,
+                    accept_multiple_files=True, key=f"{key_pref}_upload",
                 )
                 if uploads:
                     st.session_state[state_key_data] = [f.read() for f in uploads]
-                    st.success(f"Loaded {len(uploads)} files")
+                    st.rerun()
             else:
                 upload = st.file_uploader(
-                    f"Upload {title}",
-                    type=file_types,
-                    key=f"{key_pref}_upload",
+                    f"Upload {title}", type=file_types, key=f"{key_pref}_upload",
                 )
                 if upload:
                     st.session_state[state_key_data] = upload.read()
                     if state_key_name:
                         st.session_state[state_key_name] = upload.name
-                    st.success(f"Loaded {upload.name}")
+                    st.rerun()
             return
  
         if not st.session_state.get("access_token") or not st.session_state.get("site_info"):
-            st.warning("Connect to SharePoint first")
+            st.warning("🔗 Connect to SharePoint first (sidebar)")
             return
  
-        # Folder navigation — independent per file picker
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            st.caption(f"📁 Path: {st.session_state[path_key]}")
-        with col2:
-            if st.button("⬆ Up", key=f"{key_pref}_up") and st.session_state[path_key] != "root":
+        # ── Breadcrumb navigation ──
+        _breadcrumb(st.session_state[path_key])
+ 
+        # Up button only when not at root
+        if st.session_state[path_key] != "root":
+            if st.button("⬆ Back", key=f"{key_pref}_up", help="Go up one level"):
                 current = st.session_state[path_key]
                 st.session_state[path_key] = (
                     "/".join(current.split("/")[:-1]) if "/" in current else "root"
                 )
                 st.rerun()
  
-        items, _ = list_sharepoint_files(
+        # ── Fetch folder contents ──
+        items, err = list_sharepoint_files(
             st.session_state.access_token,
             st.session_state.site_info["id"],
             st.session_state[path_key],
         )
-        if not items:
-            st.info("No items found in current folder")
+        if err or not items:
+            st.info("📂 Folder is empty")
             return
  
-        # Show folders for navigation
         folders = [i for i in items if "folder" in i]
-        if folders:
-            folder = st.selectbox(
-                "Navigate into folder:",
-                ["-- Stay Here --"] + [f["name"] for f in folders],
-                key=f"{key_pref}_folder_select",
+        files   = [
+            i for i in items
+            if i["name"].lower().endswith(
+                tuple(f".{t}" if not t.startswith(".") else t for t in file_types)
             )
-            if folder != "-- Stay Here --" and st.button("Enter Folder", key=f"{key_pref}_enter_folder"):
-                current = st.session_state[path_key]
-                st.session_state[path_key] = folder if current == "root" else f"{current}/{folder}"
-                st.rerun()
+        ]
  
-        # Show matching files
-        files = [i for i in items if i["name"].lower().endswith(tuple(f".{t}" if not t.startswith(".") else t for t in file_types))]
+        # ── Folder tiles ──
+        if folders:
+            # Render folder buttons as a grid using columns
+            cols_per_row = 4
+            for row_start in range(0, len(folders), cols_per_row):
+                row_folders = folders[row_start:row_start + cols_per_row]
+                cols = st.columns(len(row_folders))
+                for col, f in zip(cols, row_folders):
+                    with col:
+                        if st.button(
+                            f"📁  {f['name']}",
+                            key=f"{key_pref}_folder_{f['id']}",
+                            use_container_width=True,
+                        ):
+                            current = st.session_state[path_key]
+                            st.session_state[path_key] = (
+                                f["name"] if current == "root" else f"{current}/{f['name']}"
+                            )
+                            st.rerun()
+ 
+        # ── File selection ──
         if not files:
-            st.info(f"No {', '.join(file_types)} files in current folder")
+            st.markdown(
+                f'<div class="fp-status-pending">No {", ".join(file_types).upper()} files in this folder</div>',
+                unsafe_allow_html=True,
+            )
             return
  
         if select_mode == "multiple":
             selected = st.multiselect(
-                f"Select {title}:",
+                "Select files:",
                 [f["name"] for f in files],
                 key=f"{key_pref}_select",
             )
-            if st.button(confirm_label, key=f"{key_pref}_confirm"):
-                with st.spinner(f"Downloading {title}..."):
-                    st.session_state[state_key_data] = []
+        else:
+            sel = st.selectbox(
+                "Select file:",
+                ["-- None --"] + [f["name"] for f in files],
+                key=f"{key_pref}_select",
+            )
+            selected = [] if sel == "-- None --" else [sel]
+ 
+        if selected and st.button(
+            f"⬇ {confirm_label}",
+            key=f"{key_pref}_confirm",
+            type="primary",
+            use_container_width=True,
+        ):
+            with st.spinner(f"Downloading..."):
+                if select_mode == "multiple":
+                    downloaded = []
                     for filename in selected:
                         file_obj = next(f for f in files if f["name"] == filename)
                         content, _ = download_sharepoint_file(
@@ -535,17 +706,13 @@ def _render_sharepoint_file_picker(
                             file_obj["id"],
                         )
                         if content:
-                            st.session_state[state_key_data].append(content)
-                    st.success(f"Downloaded {len(st.session_state[state_key_data])} files")
-        else:
-            selected = st.selectbox(
-                f"Select {title}:",
-                ["-- None --"] + [f["name"] for f in files],
-                key=f"{key_pref}_select",
-            )
-            if selected != "-- None --" and st.button(confirm_label, key=f"{key_pref}_confirm"):
-                with st.spinner(f"Downloading {title}..."):
-                    file_obj = next(f for f in files if f["name"] == selected)
+                            downloaded.append(content)
+                    # Only persist if download succeeded — never wipe existing data
+                    if downloaded:
+                        st.session_state[state_key_data] = downloaded
+                        st.rerun()
+                else:
+                    file_obj = next(f for f in files if f["name"] == selected[0])
                     content, _ = download_sharepoint_file(
                         st.session_state.access_token,
                         st.session_state.site_info["id"],
@@ -555,35 +722,43 @@ def _render_sharepoint_file_picker(
                         st.session_state[state_key_data] = content
                         if state_key_name:
                             st.session_state[state_key_name] = file_obj["name"]
-                        st.success(f"Downloaded {file_obj['name']}")
+                        st.rerun()
  
 def _render_adp_picker():
     if "adp_path" not in st.session_state:
         st.session_state.adp_path = "root"
  
-    with st.expander("ADP Files", expanded=True):
-        source = st.radio("ADP Source:", ["Desktop", "SharePoint"], key="adp_source", horizontal=True)
-        if source == "Desktop":
+    already_loaded = bool(st.session_state.get("adp_files_data"))
+ 
+    with st.expander("ADP Files", expanded=not already_loaded):
+        if already_loaded:
+            count = len(st.session_state.adp_files_data)
+            st.markdown(f'<div class="fp-status-ok">✓ {count} ADP file{"s" if count != 1 else ""} loaded</div>', unsafe_allow_html=True)
+            if st.button("↺ Change", key="adp_clear"):
+                del st.session_state["adp_files_data"]
+                st.rerun()
+            return
+ 
+        source = st.radio("Source:", ["💻 Desktop", "☁️ SharePoint"], key="adp_source", horizontal=True)
+ 
+        if source == "💻 Desktop":
             uploads = st.file_uploader(
-                "Upload ADP CSV files",
-                type=["csv"],
-                accept_multiple_files=True,
-                key="adp_upload",
+                "Upload ADP CSV files", type=["csv"],
+                accept_multiple_files=True, key="adp_upload",
             )
             if uploads:
                 st.session_state.adp_files_data = [f.read() for f in uploads]
-                st.success(f"Loaded {len(uploads)} ADP files")
+                st.rerun()
             return
  
         if not st.session_state.get("site_info"):
-            st.warning("Connect to SharePoint first")
+            st.warning("🔗 Connect to SharePoint first (sidebar)")
             return
  
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            st.caption(f"📁 Path: {st.session_state.adp_path}")
-        with col2:
-            if st.button("⬆ Up", key="adp_path_up") and st.session_state.adp_path != "root":
+        _breadcrumb(st.session_state.adp_path)
+ 
+        if st.session_state.adp_path != "root":
+            if st.button("⬆ Back", key="adp_path_up"):
                 current = st.session_state.adp_path
                 st.session_state.adp_path = (
                     "/".join(current.split("/")[:-1]) if "/" in current else "root"
@@ -596,35 +771,36 @@ def _render_adp_picker():
             st.session_state.adp_path,
         )
         if not items:
-            st.info("No items in current folder")
+            st.info("📂 Folder is empty")
             return
  
-        folders = [i for i in items if "folder" in i]
+        folders  = [i for i in items if "folder" in i]
         csv_files = [i for i in items if i["name"].lower().endswith(".csv")]
  
+        # Folder tiles
         if folders:
-            folder = st.selectbox(
-                "Navigate to folder:",
-                ["-- Stay Here --"] + [f["name"] for f in folders],
-                key="adp_folder_select",
-            )
-            if folder != "-- Stay Here --" and st.button("Enter Folder", key="adp_enter_folder"):
-                current = st.session_state.adp_path
-                st.session_state.adp_path = folder if current == "root" else f"{current}/{folder}"
-                st.rerun()
+            cols_per_row = 4
+            for row_start in range(0, len(folders), cols_per_row):
+                row_folders = folders[row_start:row_start + cols_per_row]
+                cols = st.columns(len(row_folders))
+                for col, f in zip(cols, row_folders):
+                    with col:
+                        if st.button(f"📁  {f['name']}", key=f"adp_folder_{f['id']}", use_container_width=True):
+                            current = st.session_state.adp_path
+                            st.session_state.adp_path = (
+                                f["name"] if current == "root" else f"{current}/{f['name']}"
+                            )
+                            st.rerun()
  
         if not csv_files:
-            st.info("No CSV files in current folder")
+            st.info("No CSV files in this folder")
             return
  
-        selected = st.multiselect(
-            "Select ADP CSV files:",
-            [f["name"] for f in csv_files],
-            key="adp_selected_files",
-        )
-        if st.button("Confirm ADP Files", key="adp_confirm_files"):
+        selected = st.multiselect("Select ADP CSV files:", [f["name"] for f in csv_files], key="adp_selected_files")
+ 
+        if selected and st.button("⬇ Confirm ADP Files", key="adp_confirm_files", type="primary", use_container_width=True):
             with st.spinner("Downloading ADP files..."):
-                st.session_state.adp_files_data = []
+                downloaded = []
                 for filename in selected:
                     file_obj = next(f for f in csv_files if f["name"] == filename)
                     content, _ = download_sharepoint_file(
@@ -633,8 +809,10 @@ def _render_adp_picker():
                         file_obj["id"],
                     )
                     if content:
-                        st.session_state.adp_files_data.append(content)
-                st.success(f"Downloaded {len(st.session_state.adp_files_data)} ADP files")
+                        downloaded.append(content)
+                if downloaded:
+                    st.session_state.adp_files_data = downloaded
+                    st.rerun()
  
 def _render_output_config():
     st.markdown("---")
@@ -644,15 +822,14 @@ def _render_output_config():
  
     if output_dest == "SharePoint" and st.session_state.get("site_info"):
         st.markdown("### Select Output Folder")
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            st.caption(f"Output Path: {st.session_state.output_path}")
-        with col2:
-            if st.button("Up", key="output_up") and st.session_state.output_path != "root":
-                if "/" in st.session_state.output_path:
-                    st.session_state.output_path = "/".join(st.session_state.output_path.split("/")[:-1])
-                else:
-                    st.session_state.output_path = "root"
+        _breadcrumb(st.session_state.output_path)
+ 
+        if st.session_state.output_path != "root":
+            if st.button("⬆ Back", key="output_up"):
+                current = st.session_state.output_path
+                st.session_state.output_path = (
+                    "/".join(current.split("/")[:-1]) if "/" in current else "root"
+                )
                 st.rerun()
  
         items, _ = list_sharepoint_files(
@@ -663,17 +840,18 @@ def _render_output_config():
         if items:
             folders = [i for i in items if "folder" in i]
             if folders:
-                folder = st.selectbox(
-                    "Navigate to output folder:",
-                    ["-- Use Current --"] + [f["name"] for f in folders],
-                    key="output_folder_select",
-                )
-                if folder != "-- Use Current --" and st.button("Enter Folder", key="output_enter_folder"):
-                    if st.session_state.output_path == "root":
-                        st.session_state.output_path = folder
-                    else:
-                        st.session_state.output_path = f"{st.session_state.output_path}/{folder}"
-                    st.rerun()
+                cols_per_row = 4
+                for row_start in range(0, len(folders), cols_per_row):
+                    row_folders = folders[row_start:row_start + cols_per_row]
+                    cols = st.columns(len(row_folders))
+                    for col, f in zip(cols, row_folders):
+                        with col:
+                            if st.button(f"📁  {f['name']}", key=f"out_folder_{f['id']}", use_container_width=True):
+                                current = st.session_state.output_path
+                                st.session_state.output_path = (
+                                    f["name"] if current == "root" else f"{current}/{f['name']}"
+                                )
+                                st.rerun()
  
         workbook_action = st.radio(
             "Workbook Action:",
@@ -767,6 +945,7 @@ def _handle_process(output_dest, workbook_action, start_date, end_date):
 def run_app():
     st.set_page_config(page_title="Payroll Processor", page_icon="💸", layout="wide")
     init_session_state()
+    _inject_css()
     creds = load_azure_credentials()
  
     # OAuth Handler
@@ -828,4 +1007,3 @@ def run_app():
  
     if st.button("🚀 Process and Generate Payroll", type="primary", use_container_width=True):
         _handle_process(output_dest, workbook_action, start_date, end_date)
- 
